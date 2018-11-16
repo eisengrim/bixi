@@ -13,6 +13,7 @@ library(dplyr)
 library(readr)
 library(tidyr)
 library(ggrepel)
+library(lubridate)
 library(sf)
 library(sp)
 library(rgdal)
@@ -20,17 +21,18 @@ library(proj4)
 library(rgeos)
 library(tmap)
 library(ggmap)
+library(RColorBrewer)
 
 theme_set(theme_minimal())
 
-# when do people rent?
+# when do people rent?          
 # where do people go?           X
 # where to people rent?         X
-# average duration?
-# where do members rent?
-# how many members bw years?
-# monthly trips by member?
-# trips per hour, weekday/end
+# average duration?             
+# where do members rent?        
+# number of renters per year    
+# monthly trips by member?      X
+# trips per hour, weekday/end (see 1)
 
 # unzip bixi data -- move to data folder
 # unzip("BixiMontrealRentals2018.zip")
@@ -327,3 +329,97 @@ mtl.base +
 
 ################################################################################
 # time series of station usage
+bixi <- rbind(bixi.2016, bixi.2017, bixi.2018)
+
+rentals <- bixi %>%
+  mutate(month=as.integer(month(start_date)),
+         year=as.integer(year(start_date))) %>%
+  mutate(date=format(as.Date(start_date), "%Y-%m")) %>%
+  group_by(date, is_member) %>%
+  dplyr::summarise(n.rentals = n()) %>%
+  ungroup() %>%
+  mutate(date2=as.Date(paste(rentals$date,"-01",sep="")))
+
+ggplot(data=rentals, aes(x=date2, y=n.rentals, group=as.factor(is_member), fill=as.factor(is_member))) +
+  geom_bar(stat="identity") +
+  labs(x="Date", y="Number of Rentals",
+       title="Number of Bixi Rentals Over Time",
+       subtitle="Number of rentals per month stratified by membership, April 2016 - October 2018",
+       caption="Author: Kody Crowell (@hummushero); Source: Bixi Open Data (2018)") +
+  scale_fill_manual(values=rev(red.ramp), name="", labels=c("Occasionals","Members"),
+                    guide = guide_legend(
+                      direction = "vertical", keyheight = unit(2, units = "mm"),
+                      keywidth = unit(100/length(labels), units = "mm"),
+                      title.position = 'right', title.hjust = 0.5, label.hjust = 0.5,
+                      reverse = T, label.position = "bottom")) +
+  scale_x_date(date_breaks="1 month", date_labels="%b") +
+  geom_label(data=rentals %>% filter(month(date2)==7 & is_member==T), 
+            aes(x=date2, y=250000, label=year(date2)), inherit.aes=F) +
+  theme_mir() +
+  theme(strip.text.x = element_text(size=rel(1)),
+        strip.text.y = element_text(size=rel(1)),
+        strip.background = element_blank(),
+        legend.background = element_blank(),
+        legend.justification = c(0, 0),
+        plot.title = element_text(size=18, margin=margin(b=10)),
+        plot.subtitle = element_text(size=12, color=mir.gray, face="italic",
+                                     margin=margin(b=25)),
+        plot.caption = element_text(size=10, margin=margin(t=10), 
+                                    color="grey60", hjust=0)) # 1135x800
+
+################################################################################
+trips.m <- bixi.2018 %>%
+  mutate(origin = start_station_code,
+         dest = end_station_code) %>%
+  group_by(origin, dest, is_member) %>%
+  dplyr::summarise(trips = n()) %>%
+  distinct(.) %>%
+  inner_join(stations.2018, by=c("origin"="code")) %>%
+  rename("lat0" = "latitude", "lon0" = "longitude", "oname"="name") %>%
+  inner_join(stations.2018, by=c("dest"="code")) %>%
+  rename("lat1" = "latitude", "lon1" = "longitude", "dname"="name") %>%
+  filter(origin != dest)
+
+# create a spatial points data frame for bixi stations as origin/destination
+sl.or <- SpatialPointsDataFrame(coords=trips.m[,c(7,6)],
+                                data=trips.m[,-c(7,6,9,10)],
+                                proj4string=CRS("+proj=longlat +datum=NAD83"))
+sl.de <- SpatialPointsDataFrame(coords=trips.m[,c(10,9)],
+                                data=trips.m[,-c(7,8,9,10)],
+                                proj4string=CRS("+proj=longlat +datum=NAD83"))
+
+# transform to mtlfsa coordinates
+sl.or <- spTransform(sl.or, CRS(proj4string(mtlfsa)))
+sl.de <- spTransform(sl.de, CRS(proj4string(mtlfsa)))
+
+# fortify for plotting
+st.or <- as.data.frame(sl.or)
+st.de <- as.data.frame(sl.de)
+
+# replace old lon/lat data in trips.m with new transformed variables
+trips.m$lon0 <- st.or$lon0
+trips.m$lat0 <- st.or$lat0
+trips.m$lon1 <- st.de$lon1
+trips.m$lat1 <- st.de$lat1
+
+# as before, remove stations not on montreal island
+trips.m <- trips.m[-which(trips.m$lon0 > 7634600 & trips.m$lat0 > 1248000 |
+                        trips.m$lon1 > 7634600 & trips.m$lat1 > 1248000),]
+
+# flow map, filter number of trips
+# add to existing montreal base map
+mtl.base +
+  geom_point(mapping=aes(x=longitude, y=latitude), data=st.spdf, color="#4b4b4b", 
+             inherit.aes=F, size=0.5) +
+  geom_curve(aes(x=lon0, y=lat0, xend=lon1, yend=lat1, alpha=0.8),
+             data=trips.m[trips.m$trips > 400,], col=mir.red, # color by membership!!!
+             curvature=0.2, inherit.aes=F) +
+  scale_alpha_continuous(range = c(0.05, 0.25)) +
+  coord_fixed(xlim=c(7622000, 7635000), ylim=c(1236500, 1253500), ratio=1) +
+  labs(x = NULL,                                                                                        
+       y = NULL,                                                                                        
+       title = "Bixi Traffic in Montreal",                                                 
+       subtitle = "Number of trips by members, Apr-Oct 2018\nArcs with <400 trips are excluded",               
+       caption = "Author: Kody Crowell (@hummushero) // Geometries: Stats Can, 2016; Bixi Montreal, 2018") +
+  guides(alpha = F, color=F)  +
+  theme_map() # save as 530x765 // 692x1000
