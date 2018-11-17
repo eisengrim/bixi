@@ -480,3 +480,48 @@ ggplot(data=rentals.sun, aes(x=is.free, y=mean.rentals, group=factor(is_member),
                                      margin=margin(b=25)),
         plot.caption = element_text(size=10, margin=margin(t=10), 
                                     color="grey60", hjust=0)) # 1135x800
+
+# stats
+nrow(bixi.2018)
+nrow(bixi.2018 %>% filter(is_member==1))
+mean(bixi.2018$duration_sec)
+
+# 5133193
+# 4250824 -> 82.8% 
+# 649 s -- 10 minutes
+
+bixi.times <- bixi.2018 %>%
+  select(-end_date) %>%
+  mutate(weekend=ifelse(weekdays(start_date) == "Sunday" | 
+                          weekdays(start_date) == "Saturday", TRUE, FALSE),
+         time=format(as.POSIXct(start_date), "%H:%M:%S")) %>%
+  group_by(time, weekend) %>%
+  dplyr::summarise(ntrips = n()) %>%
+  distinct(.)
+
+# highlight region data?
+ggplot(data=bixi.times, aes(x=as.POSIXct(time, format="%H:%M:%S"), y=ntrips, group=as.factor(weekend), 
+                            color=as.factor(weekend))) +
+  geom_line() +
+  labs(x="Time (HH:MM)", y="Number of Rentals",
+       title="Number of Bixi Rentals During a Day",
+       subtitle="Average number of rentals per minute on weekdays vs weekends, April 2018 - October 2018",
+       caption="Author: Kody Crowell (@hummushero); Source: Bixi Open Data (2018)") +
+  scale_color_manual(values=rev(red.ramp[c(7,5)]), name="", labels=c("Weekdays","Weekends"),
+                    guide = guide_legend(
+                      direction = "vertical", keyheight = unit(2, units = "mm"),
+                      keywidth = unit(100/length(labels), units = "mm"),
+                      title.position = 'right', title.hjust = 0.5, label.hjust = 0.5,
+                      reverse = T, label.position = "bottom")) +
+  scale_x_datetime(breaks = scales::date_breaks("1 hour"), date_labels = "%H:%M") +
+  theme_mir() +
+  theme(strip.text.x = element_text(size=rel(1)),
+        strip.text.y = element_text(size=rel(1)),
+        strip.background = element_blank(),
+        legend.background = element_blank(),
+        legend.justification = c(0, 0),
+        plot.title = element_text(size=18, margin=margin(b=10)),
+        plot.subtitle = element_text(size=12, color=mir.gray, face="italic",
+                                     margin=margin(b=25)),
+        plot.caption = element_text(size=10, margin=margin(t=10), 
+                                    color="grey60", hjust=0))
