@@ -21,6 +21,7 @@ library(proj4)
 library(rgeos)
 library(tmap)
 library(ggmap)
+library(scales)
 library(RColorBrewer)
 
 theme_set(theme_minimal())
@@ -29,7 +30,7 @@ theme_set(theme_minimal())
 # where do people go?           X
 # where to people rent?         X
 # average duration?             
-# where do members rent?        
+# where do members rent?        X
 # number of renters per year    
 # monthly trips by member?      X
 # trips per hour, weekday/end (see 1)
@@ -372,8 +373,12 @@ trips.m <- bixi.2018 %>%
   mutate(origin = start_station_code,
          dest = end_station_code) %>%
   group_by(origin, dest, is_member) %>%
-  dplyr::summarise(trips = n()) %>%
+  dplyr::summarise(mtrips = n()) %>%
   distinct(.) %>%
+  filter(is_member == 1) %>%
+  select(-is_member) %>%
+  inner_join(select(trips, origin, dest, trips), by=c("origin", "dest")) %>%
+  mutate(trips.p = mtrips/trips) %>%
   inner_join(stations.2018, by=c("origin"="code")) %>%
   rename("lat0" = "latitude", "lon0" = "longitude", "oname"="name") %>%
   inner_join(stations.2018, by=c("dest"="code")) %>%
@@ -381,11 +386,11 @@ trips.m <- bixi.2018 %>%
   filter(origin != dest)
 
 # create a spatial points data frame for bixi stations as origin/destination
-sl.or <- SpatialPointsDataFrame(coords=trips.m[,c(7,6)],
-                                data=trips.m[,-c(7,6,9,10)],
+sl.or <- SpatialPointsDataFrame(coords=trips.m[,c(8,7)],
+                                data=trips.m[,-c(7,8,10,11)],
                                 proj4string=CRS("+proj=longlat +datum=NAD83"))
-sl.de <- SpatialPointsDataFrame(coords=trips.m[,c(10,9)],
-                                data=trips.m[,-c(7,8,9,10)],
+sl.de <- SpatialPointsDataFrame(coords=trips.m[,c(11,10)],
+                                data=trips.m[,-c(7,8,10,11)],
                                 proj4string=CRS("+proj=longlat +datum=NAD83"))
 
 # transform to mtlfsa coordinates
@@ -403,23 +408,75 @@ trips.m$lon1 <- st.de$lon1
 trips.m$lat1 <- st.de$lat1
 
 # as before, remove stations not on montreal island
-trips.m <- trips.m[-which(trips.m$lon0 > 7634600 & trips.m$lat0 > 1248000 |
-                        trips.m$lon1 > 7634600 & trips.m$lat1 > 1248000),]
+# trips.m <- trips.m[-which(trips.m$lon0 > 7634600 & trips.m$lat0 > 1248000 |
+#                         trips.m$lon1 > 7634600 & trips.m$lat1 > 1248000),]
 
 # flow map, filter number of trips
 # add to existing montreal base map
+# color by membership!!!
 mtl.base +
-  geom_point(mapping=aes(x=longitude, y=latitude), data=st.spdf, color="#4b4b4b", 
+  geom_point(mapping=aes(x=longitude, y=latitude), data=st.spdf, color=mir.gray, 
              inherit.aes=F, size=0.5) +
-  geom_curve(aes(x=lon0, y=lat0, xend=lon1, yend=lat1, alpha=0.8),
-             data=trips.m[trips.m$trips > 400,], col=mir.red, # color by membership!!!
-             curvature=0.2, inherit.aes=F) +
+  geom_curve(aes(x=lon0, y=lat0, xend=lon1, yend=lat1, alpha=0.8, color=trips.p),
+             data=trips.m[trips.m$trips > 300,], curvature=0.2, inherit.aes=F) +
   scale_alpha_continuous(range = c(0.05, 0.25)) +
-  coord_fixed(xlim=c(7622000, 7635000), ylim=c(1236500, 1253500), ratio=1) +
+  scale_color_gradient2(low="blue", mid=mir.gray, high=muted(mir.red), midpoint=0.5) +
+  coord_fixed(ratio=1, xlim=c(7628000, 7633000), ylim=c(1243000, 1247000)) + 
   labs(x = NULL,                                                                                        
        y = NULL,                                                                                        
-       title = "Bixi Traffic in Montreal",                                                 
-       subtitle = "Number of trips by members, Apr-Oct 2018\nArcs with <400 trips are excluded",               
+       title = "Bixi Traffic by Membership in Montreal",                                                 
+       subtitle = "Number of trips colored by proportion of members, Apr-Oct 2018\nArcs with <300 trips are excluded",               
        caption = "Author: Kody Crowell (@hummushero) // Geometries: Stats Can, 2016; Bixi Montreal, 2018") +
   guides(alpha = F, color=F)  +
   theme_map() # save as 530x765 // 692x1000
+
+
+## bixi free sundays? 
+# 27 May 
+# 24 June 
+# 29 July 
+# 26 August 
+# 30 Septembre
+# 28 October 
+
+free.days <- c("2018-05-27", "2018-06-24", "2018-07-29", "2018-08-26",
+               "2018-09-30", "2018-10-28")
+
+rentals.sun <- bixi.2018 %>%
+  mutate(month=as.integer(month(start_date)),
+         year=as.integer(year(start_date)),
+         weekday=weekdays(start_date)) %>%
+  filter(weekday=="Sunday") %>%
+  mutate(date=format(as.Date(start_date), "%Y-%m-%d")) %>%
+  group_by(date, is_member) %>%
+  dplyr::summarise(n.rentals = n()) %>%
+  ungroup() %>%
+  mutate(is.free = as.factor(ifelse(date %in% free.days, "Yes", "No"))) %>%
+  group_by(is.free, is_member) %>%
+  dplyr::summarise(mean.rentals=mean(n.rentals))
+
+
+ggplot(data=rentals.sun, aes(x=is.free, y=mean.rentals, group=factor(is_member),
+                             fill=factor(is_member))) +
+  geom_bar(stat="identity") +
+  labs(x="Free days", y="Mean Number of Rentals",
+       title="Do Free Sundays affect Bixi Rentals?",
+       subtitle="Number of Sunday rentals on regular vs. free days, April 2018 - October 2018",
+       caption="Author: Kody Crowell (@hummushero); Source: Bixi Open Data (2018)") +
+  scale_fill_manual(values=rev(red.ramp), name="", labels=c("Occasionals","Members"),
+                    guide = guide_legend(
+                      direction = "vertical", keyheight = unit(2, units = "mm"),
+                      keywidth = unit(100/length(labels), units = "mm"),
+                      title.position = 'right', title.hjust = 0.5, label.hjust = 0.5,
+                      reverse = T, label.position = "bottom")) +
+  theme_mir() +
+  theme(strip.text.x = element_text(size=rel(1)),
+        strip.text.y = element_text(size=rel(1)),
+        strip.background = element_blank(),
+        legend.background = element_blank(),
+        legend.justification = c(0, 0),
+        plot.title = element_text(size=18, margin=margin(b=10)),
+        plot.subtitle = element_text(size=12, color=mir.gray, face="italic",
+                                     margin=margin(b=25)),
+        plot.caption = element_text(size=10, margin=margin(t=10), 
+                                    color="grey60", hjust=0)) # 1135x800
